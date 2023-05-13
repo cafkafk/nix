@@ -1,12 +1,19 @@
 let
-  inherit (builtins) concatStringsSep attrNames;
+  inherit (builtins) concatStringsSep attrValues mapAttrs;
+  inherit (import ./utils.nix) optionalString;
 in
 
 builtinsInfo:
 let
-  showBuiltin = name:
+  showBuiltin = name: { doc, args, arity, experimental-feature }:
     let
-      inherit (builtinsInfo.${name}) doc args;
+      xpNotice = optionalString (experimental-feature != null) ''
+
+
+        This function is only available if you enable the
+        [experimental](@docroot@/contributing/experimental-features.md) feature
+        [${experimental-feature}](@docroot@/contributing/experimental-features.md#xp-feature-${experimental-feature}.
+      '';
     in
     ''
       <dt id="builtins-${name}">
@@ -14,11 +21,10 @@ let
       </dt>
       <dd>
 
-        ${doc}
+        ${doc + xpNotice}
 
       </dd>
     '';
   listArgs = args: concatStringsSep " " (map (s: "<var>${s}</var>") args);
 in
-concatStringsSep "\n" (map showBuiltin (attrNames builtinsInfo))
-
+concatStringsSep "\n" (attrValues (mapAttrs showBuiltin builtinsInfo))

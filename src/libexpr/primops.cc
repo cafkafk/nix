@@ -238,7 +238,7 @@ static void import(EvalState & state, const PosIdx pos, Value & vPath, Value * v
     }
 }
 
-static RegisterPrimOp primop_scopedImport(RegisterPrimOp::Info {
+static RegisterPrimOp primop_scopedImport(PrimOp {
     .name = "scopedImport",
     .arity = 2,
     .fun = [](EvalState & state, const PosIdx pos, Value * * args, Value & v)
@@ -692,7 +692,7 @@ static void prim_genericClosure(EvalState & state, const PosIdx pos, Value * * a
         v.listElems()[n++] = i;
 }
 
-static RegisterPrimOp primop_genericClosure(RegisterPrimOp::Info {
+static RegisterPrimOp primop_genericClosure(PrimOp {
     .name = "__genericClosure",
     .args = {"attrset"},
     .arity = 1,
@@ -809,7 +809,7 @@ static void prim_addErrorContext(EvalState & state, const PosIdx pos, Value * * 
     }
 }
 
-static RegisterPrimOp primop_addErrorContext(RegisterPrimOp::Info {
+static RegisterPrimOp primop_addErrorContext(PrimOp {
     .name = "__addErrorContext",
     .arity = 2,
     .fun = prim_addErrorContext,
@@ -1400,7 +1400,7 @@ drvName, Bindings * attrs, Value & v)
     v.mkAttrs(result);
 }
 
-static RegisterPrimOp primop_derivationStrict(RegisterPrimOp::Info {
+static RegisterPrimOp primop_derivationStrict(PrimOp {
     .name = "derivationStrict",
     .arity = 1,
     .fun = prim_derivationStrict,
@@ -1664,7 +1664,7 @@ static void prim_findFile(EvalState & state, const PosIdx pos, Value * * args, V
     v.mkPath(state.checkSourcePath(state.findFile(searchPath, path, pos)));
 }
 
-static RegisterPrimOp primop_findFile(RegisterPrimOp::Info {
+static RegisterPrimOp primop_findFile(PrimOp {
     .name = "__findFile",
     .arity = 2,
     .fun = prim_findFile,
@@ -2385,7 +2385,7 @@ static void prim_unsafeGetAttrPos(EvalState & state, const PosIdx pos, Value * *
         state.mkPos(v, i->pos);
 }
 
-static RegisterPrimOp primop_unsafeGetAttrPos(RegisterPrimOp::Info {
+static RegisterPrimOp primop_unsafeGetAttrPos(PrimOp {
     .name = "__unsafeGetAttrPos",
     .arity = 2,
     .fun = prim_unsafeGetAttrPos,
@@ -4058,10 +4058,10 @@ static RegisterPrimOp primop_splitVersion({
 RegisterPrimOp::PrimOps * RegisterPrimOp::primOps;
 
 
-RegisterPrimOp::RegisterPrimOp(Info && info)
+RegisterPrimOp::RegisterPrimOp(PrimOp && primOp)
 {
     if (!primOps) primOps = new PrimOps;
-    primOps->push_back(std::move(info));
+    primOps->push_back(std::move(primOp));
 }
 
 
@@ -4074,54 +4074,189 @@ void EvalState::createBaseEnv()
 
     /* `builtins' must be first! */
     v.mkAttrs(buildBindings(128).finish());
-    addConstant("builtins", v);
+    addConstant("builtins", v, {
+        .type = "attribute set",
+        .doc = R"(
+          Contains all the [built-in functions](./builtins.md) and values, in order to avoid polluting the global scope.
+
+          Since built-in functions were added over time, [testing for attributes](./operators.md#has-attribute) in `builtins` can be used for graceful fallback on older Nix installations:
+
+          ```nix
+          if builtins ? getEnv then builtins.getEnv "PATH" else ""
+          ```
+        )",
+    });
 
     v.mkBool(true);
-    addConstant("true", v);
+    addConstant("true", v, {
+        .type = "boolean",
+        .doc = R"(
+          Primitive value.
+
+          It can be returned by
+          [comparison operators](@docroot@/language/operators.md#Comparison)
+          and used in
+          [conditional expressions](@docroot@/language/constructs.md#Conditionals).
+
+          The name `true` is not special, and can be shadowed:
+
+          ```nix-repl
+          nix-repl> let true = 1; in true
+          1
+          ```
+        )",
+    });
 
     v.mkBool(false);
-    addConstant("false", v);
+    addConstant("false", v, {
+        .type = "boolean",
+        .doc = R"(
+          Primitive value.
+
+          It can be returned by
+          [comparison operators](@docroot@/language/operators.md#Comparison)
+          and used in
+          [conditional expressions](@docroot@/language/constructs.md#Conditionals).
+
+          The name `false` is not special, and can be shadowed:
+
+          ```nix-repl
+          nix-repl> let false = 1; in false
+          1
+          ```
+        )",
+    });
 
     v.mkNull();
-    addConstant("null", v);
+    addConstant("null", v, {
+        .type = "null",
+        .doc = R"(
+          The null value.
+
+          Users familiar with other languages might assume `null` is special syntax in the Nix language,
+          but this is in fact not the case:
+
+          ```nix-repl
+          nix-repl> let null = 1; in null
+          1
+          ```
+        )",
+    });
 
     if (!evalSettings.pureEval) {
         v.mkInt(time(0));
-        addConstant("__currentTime", v);
-
-        v.mkString(settings.thisSystem.get());
-        addConstant("__currentSystem", v);
     }
+    addConstant("__currentTime", v, {
+        .type = "integer",
+        .doc = R"(
+          Return the [Unix time](https://en.wikipedia.org/wiki/Unix_time) at first evaluation.
+          Repeated references to that name will re-use the initially obtained value.
+
+          Example:
+
+          ```console
+          $ nix repl
+          Welcome to Nix 2.15.1 Type :? for help.
+
+          nix-repl> builtins.currentTime
+          1683705525
+
+          nix-repl> builtins.currentTime
+          1683705525
+          ```
+
+          The [store path](@docroot@/glossary.md#gloss-store-path) of a derivation depending on `currentTime` will differ for each evaluation.
+        )",
+        .impureOnly = true,
+    });
+
+    if (!evalSettings.pureEval) {
+        v.mkString(settings.thisSystem.get());
+    }
+    addConstant("__currentSystem", v, {
+        .type = "string",
+        .doc = R"(
+          The built-in value `currentSystem` evaluates to the
+          [system](@docroot@/command-ref/conf-file.md#conf-pure-eval) configuration otoption,
+          which is the Nix platform identifier for the Nix installation on which the expression is being evaluated,
+          such as `"i686-linux"` or `"x86_64-darwin"`.
+
+          ```console
+          $ nix-instantiate --option system "foo bar" --eval --expr 'builtins.currentSystem'
+          "foo bar"
+          ```
+        )",
+        .impureOnly = true,
+    });
 
     v.mkString(nixVersion);
-    addConstant("__nixVersion", v);
+    addConstant("__nixVersion", v, {
+        .type = "string",
+        .doc = R"(
+          The version of Nix.
+
+          If your CLI says, say:
+          ```shell-session
+          $ nix --version
+          nix (Nix) 2.16.0
+          ```
+          Then this would be:
+          ```nix-repl
+          nix-repl> builtins.nixVersion
+          "2.16.0"
+          ```
+        )",
+    });
 
     v.mkString(store->storeDir);
-    addConstant("__storeDir", v);
+    addConstant("__storeDir", v, {
+        .type = "string",
+        .doc = R"(
+          The location (possibly only inside chroots / mount namespaces) where store paths will be located.
+
+          ```shell-session
+          $ nix-instantiate --store 'dummy://?store=/blah' --eval --expr builtins.storeDir
+          "/blah"
+          ```
+        )",
+    });
 
     /* Language version.  This should be increased every time a new
        language feature gets added.  It's not necessary to increase it
        when primops get added, because you can just use `builtins ?
        primOp' to check. */
     v.mkInt(6);
-    addConstant("__langVersion", v);
+    addConstant("__langVersion", v, {
+        .type = "integer",
+        .doc = R"(
+          The current version of the Nix language.
+        )",
+    });
 
     // Miscellaneous
     if (evalSettings.enableNativeCode) {
-        addPrimOp("__importNative", 2, prim_importNative);
-        addPrimOp("__exec", 1, prim_exec);
+        addPrimOp({
+            .name = "__importNative",
+            .arity = 2,
+            .fun = prim_importNative,
+        });
+        addPrimOp({
+            .name = "__exec",
+            .arity = 1,
+            .fun = prim_exec,
+        });
     }
 
     addPrimOp({
-        .fun = evalSettings.traceVerbose ? prim_trace : prim_second,
-        .arity = 2,
         .name = "__traceVerbose",
         .args = { "e1", "e2" },
+        .arity = 2,
         .doc = R"(
           Evaluate *e1* and print its abstract syntax representation on standard
           error if `--trace-verbose` is enabled. Then return *e2*. This function
           is useful for debugging.
         )",
+        .fun = evalSettings.traceVerbose ? prim_trace : prim_second,
     });
 
     /* Add a value containing the current Nix expression search path. */
@@ -4133,26 +4268,29 @@ void EvalState::createBaseEnv()
         attrs.alloc("prefix").mkString(i.first);
         (v.listElems()[n++] = allocValue())->mkAttrs(attrs);
     }
-    addConstant("__nixPath", v);
+    addConstant("__nixPath", v, {
+        .type = "list",
+        .doc = R"(
+          The current 'Nix Path' search path.
+        )",
+    });
 
     if (RegisterPrimOp::primOps)
         for (auto & primOp : *RegisterPrimOp::primOps)
-            if (!primOp.experimentalFeature
-                || experimentalFeatureSettings.isEnabled(*primOp.experimentalFeature))
+            if (experimentalFeatureSettings.isEnabled(primOp.experimentalFeature))
             {
-                addPrimOp({
-                    .fun = primOp.fun,
-                    .arity = std::max(primOp.args.size(), primOp.arity),
-                    .name = primOp.name,
-                    .args = primOp.args,
-                    .doc = primOp.doc,
-                });
+                auto primOpAdjusted = primOp;
+                primOpAdjusted.arity = std::max(primOp.args.size(), primOp.arity);
+                addPrimOp(std::move(primOpAdjusted));
             }
 
     /* Add a wrapper around the derivation primop that computes the
-       `drvPath' and `outPath' attributes lazily. */
+       `drvPath' and `outPath' attributes lazily.
+
+       Null docs because it is documented separately.
+       */
     auto vDerivation = allocValue();
-    addConstant("derivation", vDerivation);
+    addConstant("derivation", vDerivation, {});
 
     /* Now that we've added all primops, sort the `builtins' set,
        because attribute lookups expect it to be sorted. */
